@@ -39,27 +39,33 @@ class PGDAttack:
         performs random initialization and early stopping, depending on the 
         self.rand_init and self.early_stop flags.
         """
+        adv_x = x.clone().detach()
         if self.rand_init:
-            delta = torch.zeros_like(x).uniform_(-self.eps, self.eps)
-            delta = torch.clamp(x + delta, min=0, max=1) - x
-        else:
-            delta = torch.zeros_like(x)
-        delta.requires_grad = True
+            # Starting at a uniformly random point
+            adv_x = adv_x + torch.empty_like(adv_x).uniform_(-self.eps, self.eps)
+            adv_x = torch.clamp(adv_x, min=0, max=1).detach()
+
         for i in range(self.n):
-            outputs = self.model(x + delta)
+            adv_x.requires_grad = True
+            outputs = self.model(adv_x)
+            if self.early_stop and not (torch.argmax(outputs, dim=1) == y).any():
+                break
+
+            # Calculate loss
             loss = self.loss_func(outputs, y)
             if targeted:
                 loss = -loss
-            grad = torch.autograd.grad(loss, delta)[0]
-            delta.data = torch.clamp(delta + self.alpha * torch.sign(grad), min=-self.eps, max=self.eps)
-            delta.data = torch.clamp(x + delta, min=0, max=1) - x
-            if self.early_stop and (torch.abs(delta) <= self.eps).all():
-                break
-        x_adv = x + delta
-        assert torch.all(x_adv >= 0.) and torch.all(x_adv <= 1.)
-        assert torch.all(torch.abs(x_adv - x) <= self.eps)
+            # Update adversarial images
+            grad = torch.autograd.grad(loss, adv_x, retain_graph=False, create_graph=False)[0]
 
-        return x_adv
+            adv_x = adv_x.detach() + self.alpha * grad.sign()
+            delta = torch.clamp(adv_x - x, min=-self.eps, max=self.eps)
+            adv_x = torch.clamp(x + delta, min=0, max=1).detach()
+
+        assert torch.all(adv_x >= 0.) and torch.all(adv_x <= 1.)
+        assert torch.all(torch.abs(adv_x - x) <= self.eps)
+
+        return adv_x
 
 
 class NESBBoxPGDAttack:
