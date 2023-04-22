@@ -48,22 +48,25 @@ class PGDAttack:
         for i in range(self.n):
             adv_x.requires_grad = True
             outputs = self.model(adv_x)
-            if self.early_stop and not (torch.argmax(outputs, dim=1) == y).any():
-                break
+            if self.early_stop:
+                if not targeted and not (torch.argmax(outputs, dim=1) == y).any():
+                    break
+                elif targeted and (torch.argmax(outputs, dim=1) == y).all():
+                    break
 
             # Calculate loss
             loss = self.loss_func(outputs, y)
             if targeted:
                 loss = -loss
             # Update adversarial images
-            grad = torch.autograd.grad(loss, adv_x, retain_graph=False, create_graph=False)[0]
+            grad = torch.autograd.grad(loss.sum(), adv_x, retain_graph=False, create_graph=False)[0]
 
             adv_x = adv_x.detach() + self.alpha * grad.sign()
             delta = torch.clamp(adv_x - x, min=-self.eps, max=self.eps)
             adv_x = torch.clamp(x + delta, min=0, max=1).detach()
 
         assert torch.all(adv_x >= 0.) and torch.all(adv_x <= 1.)
-        assert torch.all(torch.abs(adv_x - x) <= self.eps)
+        assert torch.all(torch.abs(adv_x - x) <= self.eps + 1e-7)
 
         return adv_x
 
