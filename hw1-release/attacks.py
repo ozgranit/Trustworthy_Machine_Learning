@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
 class PGDAttack:
     """
     White-box L_inf PGD attack using the cross-entropy loss
@@ -38,7 +39,27 @@ class PGDAttack:
         performs random initialization and early stopping, depending on the 
         self.rand_init and self.early_stop flags.
         """
-        pass # FILL ME
+        if self.rand_init:
+            delta = torch.zeros_like(x).uniform_(-self.eps, self.eps)
+            delta = torch.clamp(x + delta, min=0, max=1) - x
+        else:
+            delta = torch.zeros_like(x)
+        delta.requires_grad = True
+        for i in range(self.n):
+            outputs = self.model(x + delta)
+            loss = self.loss_func(outputs, y)
+            if targeted:
+                loss = -loss
+            grad = torch.autograd.grad(loss, delta)[0]
+            delta.data = torch.clamp(delta + self.alpha * torch.sign(grad), min=-self.eps, max=self.eps)
+            delta.data = torch.clamp(x + delta, min=0, max=1) - x
+            if self.early_stop and (torch.abs(delta) <= self.eps).all():
+                break
+        x_adv = x + delta
+        assert torch.all(x_adv >= 0.) and torch.all(x_adv <= 1.)
+        assert torch.all(torch.abs(x_adv - x) <= self.eps)
+
+        return x_adv
 
 
 class NESBBoxPGDAttack:

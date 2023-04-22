@@ -36,13 +36,27 @@ class TMLDataset(Dataset):
             x = self.transform(x)
         return x, y
 
+
 def compute_accuracy(model, data_loader, device):
     """
     Evaluates and returns the (benign) accuracy of the model 
     (a number in [0, 1]) on the labeled data returned by 
     data_loader.
     """
-    pass # FILL ME
+    num_correct = 0
+    num_total = 0
+    with torch.no_grad():
+        for inputs, labels in data_loader:
+            inputs = inputs.to(device)
+            labels = labels.to(device)
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs, 1)
+            num_correct += (predicted == labels).sum().item()
+            num_total += labels.size(0)
+    accuracy = num_correct / num_total
+
+    return accuracy
+
 
 def run_whitebox_attack(attack, data_loader, targeted, device, n_classes=4):
     """
@@ -55,7 +69,29 @@ def run_whitebox_attack(attack, data_loader, targeted, device, n_classes=4):
     2- True labels in case of untargeted attacks, and target labels in
        case of targeted attacks.
     """
-    pass # FILL ME
+    model = attack.model
+    model.eval()
+    adv_images = []
+    true_labels = []
+    target_labels = []
+    for i, (x, y) in enumerate(data_loader):
+        x, y = x.to(device), y.to(device)
+        if targeted:
+            t = (y + torch.randint(1, n_classes, size=y.shape).to(device)) % n_classes
+        else:
+            t = y
+        adv_x = attack.execute(x, t)
+        assert adv_x.min() >= x.min(), 'Adversarial images lie outside of the lower bound'
+        assert adv_x.max() <= x.max(), 'Adversarial images lie outside of the upper bound'
+        assert torch.all(torch.abs(adv_x - x) <= attack.eps + 1e-8), 'Adversarial images lie outside of the epsilon-ball'
+        adv_images.append(adv_x)
+        true_labels.append(y)
+        target_labels.append(t)
+    adv_images = torch.cat(adv_images, dim=0)
+    true_labels = torch.cat(true_labels, dim=0)
+    target_labels = torch.cat(target_labels, dim=0)
+    return adv_images, (target_labels if targeted else true_labels)
+
 
 def run_blackbox_attack(attack, data_loader, targeted, device, n_classes=4):
     """
@@ -77,7 +113,27 @@ def compute_attack_success(model, x_adv, y, batch_size, targeted, device):
     attacks. y contains the true labels in case of untargeted attacks,
     and the target labels in case of targeted attacks.
     """
-    pass # FILL ME
+    from torch.utils.data import TensorDataset, DataLoader
+    n_samples = len(x_adv)
+    n_success = 0
+
+    # Create data loader
+    dataset = TensorDataset(x_adv, y)
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+    # Evaluate model on adversarial examples
+    for x_batch, y_batch in loader:
+        x_batch = x_batch.to(device)
+        y_batch = y_batch.to(device)
+        logits = model(x_batch)
+        if targeted:
+            n_success += (torch.argmax(logits, dim=1) == y_batch).sum().item()
+        else:
+            n_success += (torch.argmax(logits, dim=1) != y_batch).sum().item()
+
+    success_rate = n_success / n_samples
+    return success_rate
+
 
 def binary(num):
     """

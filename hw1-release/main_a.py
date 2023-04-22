@@ -77,3 +77,7 @@ plt.title('targeted')
 plt.xlabel('momentum')
 plt.ylabel('# queries')
 plt.savefig('bbox-n_queries_targeted.jpg')
+
+
+if __name__ == '__main__':
+    pass
