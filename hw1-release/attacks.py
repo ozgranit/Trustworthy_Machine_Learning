@@ -103,10 +103,48 @@ class NESBBoxPGDAttack:
         self.alpha = alpha
         self.momentum = momentum
         self.k = k
-        self.sigma=sigma
+        self.sigma = sigma
         self.rand_init = rand_init
         self.early_stop = early_stop
         self.loss_func = nn.CrossEntropyLoss(reduction='none')
+
+    import torch
+
+    def NES_gradient_estimate(self, x, y):
+        """
+        Estimates the gradient of the model at x with respect to y using the
+        Natural Evolutionary Strategies (NES) algorithm.
+
+        Inputs:
+            - model: PyTorch model to attack
+            - x: input image tensor of shape (batch_size, channels, height, width)
+            - y: tensor of true class labels of shape (batch_size,)
+            - sigma: the standard deviation of the Gaussian noise used for querying
+            - n: number of samples used to estimate the gradient
+
+        Returns:
+            - grad: gradient estimate tensor of shape (batch_size, channels, height, width)
+        """
+        batch_size = x.shape[0]
+        N = x.shape[1] * x.shape[2] * x.shape[3]  # image dimensionality
+        grad = torch.zeros((batch_size, N))  # initialize the gradient estimate
+
+        for i in range(self.k):
+            ui = torch.normal(mean=0, std=self.sigma, size=(batch_size, N))  # sample from N(0, I_NxN)
+            x_plus_ui = x + self.sigma * ui.reshape(x.shape)  # add ui to the image
+            x_minus_ui = x - self.sigma * ui.reshape(x.shape)  # subtract ui from the image
+
+            # compute the probabilities of the class y for the perturbed images
+            prob_plus = self.model(x_plus_ui)
+            prob_plus = prob_plus[torch.arange(batch_size), y]
+            prob_minus = self.model(x_minus_ui)
+            prob_minus = prob_minus[torch.arange(batch_size), y]
+
+            # update the gradient estimate
+            grad += prob_plus[:, None] * ui - prob_minus[:, None] * ui
+
+        # return the normalized gradient estimate
+        return grad / (2 * self.k * self.sigma)
 
     def execute(self, x, y, targeted=False):
         """
@@ -118,7 +156,42 @@ class NESBBoxPGDAttack:
         2- A vector with dimensionality len(x) containing the number of queries for
             each sample in x.
         """
-        pass # FILL ME
+        x_perturbed = x.clone()
+        num_queries = torch.zeros(x.shape[0], dtype=torch.long)
+
+        if self.rand_init:
+            # Starting at a uniformly random point
+            x_perturbed = x_perturbed + torch.empty_like(x_perturbed).uniform_(-self.eps, self.eps)
+            x_perturbed = torch.clamp(x_perturbed, min=0, max=1).detach()
+
+        delta = torch.zeros_like(x_perturbed)
+
+        for i in range(self.n):
+            # Estimate gradients using NES
+            gradients = self.NES_gradient_estimate(x_perturbed + delta, y)
+
+            # Update the perturbation
+            delta = self.momentum * delta + (1 - self.momentum) * self.alpha * gradients.reshape(delta.shape)
+            delta = torch.clamp(delta, -self.eps, self.eps)
+
+            # Update the adversarial samples
+            x_perturbed = torch.clamp(x + delta, 0, 1)
+
+            # Count the number of queries
+            num_queries += self.k * 2
+
+            # Check if all samples are successfully perturbed and early stop if enabled
+            outputs = self.model(x_perturbed)
+            if self.early_stop:
+                if not targeted and not (torch.argmax(outputs, dim=1) == y).any():
+                    break
+                elif targeted and (torch.argmax(outputs, dim=1) == y).all():
+                    break
+
+        assert torch.all(x_perturbed >= 0.) and torch.all(x_perturbed <= 1.)
+        assert torch.all(torch.abs(x_perturbed - x) <= self.eps + 1e-7)
+
+        return x_perturbed, num_queries
 
 
 class PGDEnsembleAttack:

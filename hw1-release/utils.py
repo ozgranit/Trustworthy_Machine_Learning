@@ -106,7 +106,34 @@ def run_blackbox_attack(attack, data_loader, targeted, device, n_classes=4):
        case of targeted attacks.
     3- The number of queries made to create each adversarial example.
     """
-    pass # FILL ME
+    model = attack.model
+    model.eval()
+    adv_images = []
+    true_labels = []
+    target_labels = []
+    n_queries_list = []
+
+    for x, y in data_loader:
+        x, y = x.to(device), y.to(device)
+        if targeted:
+            t = (y + torch.randint(1, n_classes, size=y.shape)) % n_classes
+        else:
+            t = y
+        adv_x, num_queries = attack.execute(x, t, targeted)
+        assert adv_x.min() >= 0, 'Adversarial images lie outside of the lower bound'
+        assert adv_x.max() <= 1, 'Adversarial images lie outside of the upper bound'
+        assert torch.all(
+            torch.abs(adv_x - x) <= attack.eps + 1e-7), 'Adversarial images lie outside of the epsilon-ball'
+        adv_images.append(adv_x)
+        true_labels.append(y)
+        target_labels.append(t)
+        n_queries_list.append(num_queries)
+    adv_images = torch.cat(adv_images, dim=0)
+    true_labels = torch.cat(true_labels, dim=0)
+    target_labels = torch.cat(target_labels, dim=0)
+    n_queries_list = torch.cat(n_queries_list, dim=0)
+
+    return adv_images, (target_labels if targeted else true_labels), n_queries_list
 
 
 def compute_attack_success(model, x_adv, y, batch_size, targeted, device):
