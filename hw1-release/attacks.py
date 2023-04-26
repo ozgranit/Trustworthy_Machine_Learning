@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import gc
 import torch.nn.functional as F
 
 
@@ -110,41 +111,54 @@ class NESBBoxPGDAttack:
 
     import torch
 
-    def NES_gradient_estimate(self, x, y):
-        """
-        Estimates the gradient of the model at x with respect to y using the
-        Natural Evolutionary Strategies (NES) algorithm.
+    def nes_gradient_estimate(self, adv_x, x, y, targeted):
+        grad = torch.zeros_like(adv_x)
+        query_count = 0
 
-        Inputs:
-            - model: PyTorch model to attack
-            - x: input image tensor of shape (batch_size, channels, height, width)
-            - y: tensor of true class labels of shape (batch_size,)
-            - sigma: the standard deviation of the Gaussian noise used for querying
-            - n: number of samples used to estimate the gradient
+        for j in range(self.n):
+            gc.collect()
+            print(f"iteration: {j}")
+            adv_x.requires_grad = True
+            outputs = self.model(adv_x)
+            if self.early_stop:
+                if not targeted and not (torch.argmax(outputs, dim=1) == y).any():
+                    break
+                elif targeted and (torch.argmax(outputs, dim=1) == y).all():
+                    break
 
-        Returns:
-            - grad: gradient estimate tensor of shape (batch_size, channels, height, width)
-        """
-        batch_size = x.shape[0]
-        N = x.shape[1] * x.shape[2] * x.shape[3]  # image dimensionality
-        grad = torch.zeros((batch_size, N))  # initialize the gradient estimate
+            grad_estimates = torch.zeros_like(adv_x)
+            for i in range(self.k):
+                delta_i = torch.normal(mean=0, std=1, size=adv_x.shape)  # sample from N(0, I_NxN)
+                theta_i = adv_x.detach() + self.sigma * delta_i
+                minus_theta_i = adv_x.detach() - self.sigma * delta_i
+                plus_output = self.model(theta_i)
+                minus_output = self.model(minus_theta_i)
 
-        for i in range(self.k):
-            ui = torch.normal(mean=0, std=self.sigma, size=(batch_size, N))  # sample from N(0, I_NxN)
-            x_plus_ui = x + self.sigma * ui.reshape(x.shape)  # add ui to the image
-            x_minus_ui = x - self.sigma * ui.reshape(x.shape)  # subtract ui from the image
+                # Calculate loss
+                plus_loss = self.loss_func(plus_output, y)
+                minus_loss = self.loss_func(minus_output, y)
+                if targeted:
+                    plus_loss = -plus_loss
+                    minus_loss = -minus_loss
 
-            # compute the probabilities of the class y for the perturbed images
-            prob_plus = self.model(x_plus_ui)
-            prob_plus = prob_plus[torch.arange(batch_size), y]
-            prob_minus = self.model(x_minus_ui)
-            prob_minus = prob_minus[torch.arange(batch_size), y]
+                grad_estimates += delta_i * plus_loss.sum()
+                grad_estimates -= delta_i * minus_loss.sum()
 
-            # update the gradient estimate
-            grad += prob_plus[:, None] * ui - prob_minus[:, None] * ui
+            # Normalize the gradient estimate.
+            grad_estimates /= (2 * self.k * self.sigma)
+            # Update the historical gradient.
+            grad = self.momentum * grad + (1 - self.momentum) * grad_estimates
 
-        # return the normalized gradient estimate
-        return grad / (2 * self.k * self.sigma)
+            query_count += 2 * self.k
+            adv_x = adv_x.detach() + self.alpha * grad.sign()
+            delta = torch.clamp(adv_x - x, min=-self.eps, max=self.eps).detach()
+            adv_x = torch.clamp(x + delta, min=0, max=1).detach()
+
+            del delta, grad_estimates, delta_i
+            del plus_loss, minus_loss, plus_output, minus_output
+            del minus_theta_i, theta_i
+
+        return adv_x, query_count
 
     def execute(self, x, y, targeted=False):
         """
@@ -156,42 +170,28 @@ class NESBBoxPGDAttack:
         2- A vector with dimensionality len(x) containing the number of queries for
             each sample in x.
         """
-        x_perturbed = x.clone()
-        num_queries = torch.zeros(x.shape[0], dtype=torch.long)
+        adv_x = x.clone().detach()
+        queries_per_sample = torch.zeros(len(x), dtype=torch.int32)
 
         if self.rand_init:
             # Starting at a uniformly random point
-            x_perturbed = x_perturbed + torch.empty_like(x_perturbed).uniform_(-self.eps, self.eps)
-            x_perturbed = torch.clamp(x_perturbed, min=0, max=1).detach()
+            adv_x = adv_x + torch.empty_like(adv_x).uniform_(-self.eps, self.eps)
+            adv_x = torch.clamp(adv_x, min=0, max=1).detach()
 
-        delta = torch.zeros_like(x_perturbed)
+        for i in range(len(x)):
+            xi = x[i, ...][None, ...]
+            adv_xi = adv_x[i, ...][None, ...]
+            yi = y[i, ...][None, ...]
 
-        for i in range(self.n):
-            # Estimate gradients using NES
-            gradients = self.NES_gradient_estimate(x_perturbed + delta, y)
+            adv_xi, query_count = self.nes_gradient_estimate(adv_xi, xi, yi, targeted)
 
-            # Update the perturbation
-            delta = self.momentum * delta + (1 - self.momentum) * self.alpha * gradients.reshape(delta.shape)
-            delta = torch.clamp(delta, -self.eps, self.eps)
+            queries_per_sample[i, ...][None, ...] = query_count
+            adv_x[i, ...][None, ...] = adv_xi.detach()
 
-            # Update the adversarial samples
-            x_perturbed = torch.clamp(x + delta, 0, 1)
+        assert torch.all(adv_x >= 0.) and torch.all(adv_x <= 1.)
+        assert torch.all(torch.abs(adv_x - x) <= self.eps + 1e-7)
 
-            # Count the number of queries
-            num_queries += self.k * 2
-
-            # Check if all samples are successfully perturbed and early stop if enabled
-            outputs = self.model(x_perturbed)
-            if self.early_stop:
-                if not targeted and not (torch.argmax(outputs, dim=1) == y).any():
-                    break
-                elif targeted and (torch.argmax(outputs, dim=1) == y).all():
-                    break
-
-        assert torch.all(x_perturbed >= 0.) and torch.all(x_perturbed <= 1.)
-        assert torch.all(torch.abs(x_perturbed - x) <= self.eps + 1e-7)
-
-        return x_perturbed, num_queries
+        return adv_x, queries_per_sample
 
 
 class PGDEnsembleAttack:
