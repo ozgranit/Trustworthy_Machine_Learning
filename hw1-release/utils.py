@@ -2,10 +2,12 @@ import gzip
 import struct
 from os import path
 import numpy as np
+import random
 import models
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
+
 
 def load_pretrained_cnn(cnn_id, n_classes=4, models_dir='trained-models/'):
     """
@@ -168,7 +170,17 @@ def binary(num):
     binary representation (in big-endian, where the string only
     contains '0' and '1' characters).
     """
-    pass # FILL ME
+    # Convert the float to a 32-bit integer
+    i = struct.unpack('!I', struct.pack('!f', num))[0]
+
+    # Convert the integer to a binary string
+    b = bin(i)[2:]
+
+    # Pad the binary string with leading zeros if necessary
+    b = b.zfill(32)
+
+    return b
+
 
 def float32(binary):
     """
@@ -176,13 +188,33 @@ def float32(binary):
     binary representations of float32 numbers into float32 and returns the
     result.
     """
-    pass # FILL ME
+    # Convert the binary string to a 32-bit integer
+    i = int(binary, 2)
+
+    # Convert the integer to a float32
+    f = struct.unpack('!f', struct.pack('!I', i))[0]
+
+    return f
+
 
 def random_bit_flip(w):
     """
-    This functoin receives a weight in float32 format, picks a
+    This function receives a weight in float32 format, picks a
     random bit to flip in it, flips the bit, and returns:
     1- The weight with the bit flipped
     2- The index of the flipped bit in {0, 1, ..., 31}
     """
-    pass # FILL ME
+    # Convert the weight to a binary string
+    b = binary(w)
+
+    # Pick a random bit to flip
+    i = random.randint(0, 31)
+
+    # Flip the bit
+    b = b[:i] + str(1 - int(b[i])) + b[i + 1:]
+
+    # Convert the binary string back to a float32
+    f = float32(b)
+
+    return f, i
+

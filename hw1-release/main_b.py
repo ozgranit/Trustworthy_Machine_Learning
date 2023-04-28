@@ -67,6 +67,3 @@ print('Ensemble attacks\' transferability from models 1+2 to model 0:')
 print(f'\t- untargeted attack: {sr_untarg:0.4f}')
 print(f'\t- targeted attack: {sr_targ:0.4f}')
 
-
-if __name__ == '__main__':
-    pass
