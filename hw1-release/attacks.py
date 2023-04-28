@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import gc
 import torch.nn.functional as F
 
 
@@ -109,15 +108,11 @@ class NESBBoxPGDAttack:
         self.early_stop = early_stop
         self.loss_func = nn.CrossEntropyLoss(reduction='none')
 
-    import torch
-
     def nes_gradient_estimate(self, adv_x, x, y, targeted):
         grad = torch.zeros_like(adv_x)
         query_count = 0
 
         for j in range(self.n):
-            gc.collect()
-            print(f"iteration: {j}")
             adv_x.requires_grad = True
             outputs = self.model(adv_x)
             if self.early_stop:
@@ -153,10 +148,6 @@ class NESBBoxPGDAttack:
             adv_x = adv_x.detach() + self.alpha * grad.sign()
             delta = torch.clamp(adv_x - x, min=-self.eps, max=self.eps).detach()
             adv_x = torch.clamp(x + delta, min=0, max=1).detach()
-
-            del delta, grad_estimates, delta_i
-            del plus_loss, minus_loss, plus_output, minus_output
-            del minus_theta_i, theta_i
 
         return adv_x, query_count
 
