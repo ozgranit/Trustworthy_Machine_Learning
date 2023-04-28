@@ -80,4 +80,22 @@ plt.savefig('bbox-n_queries_targeted.jpg')
 
 
 if __name__ == '__main__':
+    """
+    The test accuracy of the model is: 0.8750
+    White-box attack:
+        - untargeted success rate: 0.9800
+        - targeted success rate: 0.9600
+    Untargeted black-box attack (momentum=0.00):
+        - success rate: 0.9300
+        - median(# queries): 3600
+    Targeted black-box attack (momentum=0.00):
+        - success rate: 0.7700
+        - median(# queries): 7200
+    Untargeted black-box attack (momentum=0.90):
+        - success rate: 0.9600
+        - median(# queries): 2400
+    Targeted black-box attack (momentum=0.90):
+        - success rate: 0.8750
+        - median(# queries): 4000
+    """
     pass

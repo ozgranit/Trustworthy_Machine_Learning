@@ -221,4 +221,43 @@ class PGDEnsembleAttack:
         attacks. The method returns the adversarially perturbed samples, which
         lie in the ranges [0, 1] and [x-eps, x+eps].
         """
-        pass # FILL ME
+        adv_x = x.clone().detach()
+        if self.rand_init:
+            # Starting at a uniformly random point
+            adv_x = adv_x + torch.empty_like(adv_x).uniform_(-self.eps, self.eps)
+            adv_x = torch.clamp(adv_x, min=0, max=1).detach()
+
+        for i in range(self.n):
+            adv_x.requires_grad = True
+
+            # Calculate loss
+            loss = torch.tensor(0.)
+            for model in self.models:
+                outputs = model(adv_x)
+                loss += self.loss_func(outputs, y)
+            if targeted:
+                loss = -loss
+            # Update adversarial images
+            grad = torch.autograd.grad(loss, adv_x, retain_graph=False, create_graph=False)[0]
+
+            adv_x = adv_x.detach() + self.alpha * grad.sign()
+            delta = torch.clamp(adv_x - x, min=-self.eps, max=self.eps)
+            adv_x = torch.clamp(x + delta, min=0, max=1).detach()
+
+            # Check if attack goal is met
+            with torch.no_grad():
+                all_correct = True
+                for model in self.models:
+                    output = model(adv_x)
+                    preds = output.argmax(dim=1)
+                    if targeted:
+                        all_correct = all_correct and (preds == y).all().item()
+                    else:
+                        all_correct = all_correct and (preds != y).all().item()
+                if all_correct and self.early_stop:
+                    break
+
+        assert torch.all(adv_x >= 0.) and torch.all(adv_x <= 1.)
+        assert torch.all(torch.abs(adv_x - x) <= self.eps + 1e-7)
+
+        return adv_x

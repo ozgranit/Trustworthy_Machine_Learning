@@ -69,8 +69,6 @@ def run_whitebox_attack(attack, data_loader, targeted, device, n_classes=4):
     2- True labels in case of untargeted attacks, and target labels in
        case of targeted attacks.
     """
-    model = attack.model
-    model.eval()
     adv_images = []
     true_labels = []
     target_labels = []
